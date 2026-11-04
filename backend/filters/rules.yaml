@@ -1,5 +1,0 @@
-# Default rules are intentionally broad to avoid empty results for common searches.
-# Add your own values only if you want strict filtering.
-include_keywords: []
-exclude_keywords: []
-location_whitelist: []
