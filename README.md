@@ -40,6 +40,85 @@ relay = Relay(engine, backend=InMemoryBackend())
 relay.run_forever()
 ```
 
+## Architecture
+
+```text
+                          APPLICATION PROCESS
+   ┌──────────────────────────────────────────────────────────┐
+   │  request handler                                          │
+   │  ┌───────────────────────────┐                            │
+   │  │  BEGIN TRANSACTION          │                            │
+   │  │   INSERT orders (...)       │   business write           │
+   │  │   Outbox.enqueue(conn, ev)  │   INSERT outbox_entries    │
+   │  │  COMMIT                     │   ← atomic, same tx        │
+   │  └───────────────────────────┘                            │
+   └──────────────────────────────┬───────────────────────────┘
+                                   │
+                                   v
+                       ┌───────────────────────┐
+                       │     outbox_entries      │   (SQL table)
+                       │  id | topic | key |     │
+                       │  payload | created_at | │
+                       │  delivered_at           │
+                       └───────────┬────────────┘
+                                   │ polls (poll_once / run_forever)
+                                   v
+                          RELAY PROCESS (separate)
+   ┌──────────────────────────────────────────────────────────┐
+   │  Relay                                                     │
+   │   1. SELECT WHERE delivered_at IS NULL ORDER BY created_at │
+   │   2. DeliveryTracker.is_duplicate(id)?  -- skip if yes      │
+   │   3. backend.publish(topic, key, payload)                  │
+   │   4. UPDATE delivered_at = now()                            │
+   └──────────────────────────────┬───────────────────────────┘
+                                   │
+                                   v
+                     ┌─────────────┴─────────────┐
+                     │        Backend interface    │
+                     └──────┬───────┬───────┬─────┘
+                            │       │       │
+                   ┌────────┘  ┌────┘   ┌───┘─────┐
+                   v           v        v         v
+            ┌───────────┐ ┌────────┐ ┌──────┐ ┌─────────┐
+            │ in_memory  │ │  SQS   │ │ Redis│ │  Kafka  │
+            │ (testing)  │ │        │ │Streams│ │         │
+            └───────────┘ └────────┘ └──────┘ └─────────┘
+                                   │
+                                   v
+                          downstream consumers
+```
+
+```mermaid
+flowchart TB
+    subgraph App["Application process"]
+        A1["BEGIN TRANSACTION"] --> A2["INSERT orders(...)"]
+        A2 --> A3["Outbox.enqueue(conn, event)"]
+        A3 --> A4["COMMIT"]
+    end
+
+    A4 -->|same tx, atomic| T[("outbox_entries table\nid · topic · key · payload\ncreated_at · delivered_at")]
+
+    T -->|poll_once / run_forever| R
+
+    subgraph Relay["Relay process (separate)"]
+        R["SELECT WHERE delivered_at IS NULL"] --> D{"DeliveryTracker\nis_duplicate(id)?"}
+        D -->|no| P["backend.publish(topic, key, payload)"]
+        D -->|yes, skip publish| U
+        P --> U["UPDATE delivered_at = now()"]
+    end
+
+    U --> B{Backend interface}
+    B --> M[in_memory]
+    B --> S[SQS]
+    B --> RS[Redis Streams]
+    B --> K[Kafka]
+
+    M --> C[downstream consumers]
+    S --> C
+    RS --> C
+    K --> C
+```
+
 ## The guarantee
 
 Once a transaction commits, its event is delivered at least once, and
@@ -66,3 +145,10 @@ v0.1.0. Python 3.10+. MIT licensed.
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Further reading
+
+- [docs/quickstart.md](docs/quickstart.md) — a full walkthrough from install to running a relay.
+- [docs/dual-write-problem.md](docs/dual-write-problem.md)
+- [docs/guarantees.md](docs/guarantees.md)
+- [docs/backends.md](docs/backends.md)

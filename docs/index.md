@@ -40,6 +40,7 @@ relay.run_forever()
 
 ## Further reading
 
+- [Quickstart](quickstart.md)
 - [The dual-write problem](dual-write-problem.md)
 - [Delivery guarantees](guarantees.md)
 - [Writing a backend adapter](backends.md)
